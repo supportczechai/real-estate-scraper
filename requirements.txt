@@ -1,0 +1,6 @@
+playwright
+openpyxl
+requests
+python-dotenv
+gunicorn
+apscheduler

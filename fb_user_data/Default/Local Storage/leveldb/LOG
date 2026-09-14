@@ -1,0 +1,6 @@
+2026/09/14-18:26:13.214 68a4 Reusing MANIFEST C:\Users\adame\real-estate-scraper\face\fb_user_data\Default\Local Storage\leveldb/MANIFEST-000001
+2026/09/14-18:26:13.218 68a4 Recovering log #4
+2026/09/14-18:26:13.220 68a4 Reusing old log C:\Users\adame\real-estate-scraper\face\fb_user_data\Default\Local Storage\leveldb/000004.log 
+2026/09/14-18:27:13.237 55b8 Level-0 table #8: started
+2026/09/14-18:27:13.243 55b8 Level-0 table #8: 12371 bytes OK
+2026/09/14-18:27:13.249 55b8 Delete type=0 #4

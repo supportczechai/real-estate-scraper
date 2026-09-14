@@ -1,0 +1,12 @@
+2026/09/14-18:26:13.879 3c28 Reusing MANIFEST C:\Users\adame\real-estate-scraper\face\fb_user_data\Default\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/09/14-18:26:13.879 3c28 Recovering log #4
+2026/09/14-18:26:13.900 3c28 Reusing old log C:\Users\adame\real-estate-scraper\face\fb_user_data\Default\IndexedDB\https_www.facebook.com_0.indexeddb.leveldb/000004.log 
+2026/09/14-18:27:31.633 1ca8 Level-0 table #8: started
+2026/09/14-18:27:31.660 1ca8 Level-0 table #8: 1695891 bytes OK
+2026/09/14-18:27:31.666 1ca8 Delete type=0 #4
+2026/09/14-18:27:33.303 1ca8 Compacting 1@1 + 1@2 files
+2026/09/14-18:27:33.328 1ca8 Generated table #9@1: 2389 keys, 174253 bytes
+2026/09/14-18:27:33.328 1ca8 Compacted 1@1 + 1@2 files => 174253 bytes
+2026/09/14-18:27:33.334 1ca8 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/09/14-18:27:33.335 1ca8 Delete type=2 #5
+2026/09/14-18:27:33.335 1ca8 Delete type=2 #8
