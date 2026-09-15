@@ -1,1 +1,1 @@
-web: python -m playwright install chromium && gunicorn dashboard:app
+web: gunicorn dashboard:app --bind 0.0.0.0:$PORT
