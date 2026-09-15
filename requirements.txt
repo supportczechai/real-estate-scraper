@@ -1,6 +1,8 @@
-playwright
-openpyxl
-requests
 python-dotenv
-gunicorn
+openpyxl
+flask
+pandas
+playwright
 apscheduler
+requests
+gunicorn
