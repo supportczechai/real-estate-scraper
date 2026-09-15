@@ -1,155 +1,209 @@
 import os
 import time
-from flask import Flask, render_template_string
-import pandas as pd
-from apscheduler.schedulers.background import BackgroundScheduler
+import threading
 import requests
+import pandas as pd
+from flask import Flask, render_template_string
 from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
-# Konfigurace Telegramu (pokud máš token/chat ID, můžeš je zapsat sem nebo nechat v proměnných prostředí)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "TVUJ_TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "TVUJ_CHAT_ID")
+# --- TVOJE NASTAVENÍ ---
+TELEGRAM_TOKEN = "8959387983:AAEDIJAco1Db7dOOTRWORLVCCYXo8MjR1mcT"
+TELEGRAM_CHAT_ID = "1732988572"
+
+FACEBOOK_SKUPINY = [
+    "https://www.facebook.com/groups/253347711682148",
+    "https://www.facebook.com/groups/830134260424064",
+    "https://www.facebook.com/groups/123180986382772",
+    "https://www.facebook.com/groups/1558511207695874",
+    "https://www.facebook.com/groups/1399191310329117",
+    "https://www.facebook.com/groups/999404481313519"
+]
+
 DATA_FILE = "leads.csv"
 
-def send_telegram_notification(message):
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "TVUJ_TELEGRAM_TOKEN":
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print("Chyba při odesílání na Telegram:", e)
+# Globální paměť pro web (aby se to ukazovalo hned)
+scraped_leads = []
 
-def is_valid_buyer_lead(text):
-    """
-    STRICTNÍ FILTR: Vrací True POUZE pokud jde o koupi. 
-    Jakmile text obsahuje cokoliv o pronájmu, okamžitě a bez výjimky zahodí.
-    """
-    if not text:
+# Načtení historie ze souboru při startu (aby tam zůstaly i po restartu)
+if os.path.exists(DATA_FILE):
+    try:
+        df_old = pd.read_csv(DATA_FILE)
+        scraped_leads = df_old.to_dict('records')
+    except:
+        pass
+
+def filtrovat_jen_koupi(text):
+    if not text: 
         return False
-        
     text_lower = text.lower()
     
-    # 1. Zakázaná slova - jakmile zazní cokoli o nájmu, končíme (False)
-    rental_keywords = [
-        "pronájem", "pronajmout", "podnájem", "k pronájmu", 
-        "pronajmu", "pronajmeme", "pronájmu", "pronajímám", 
-        "hledám pronájem", "podnájmu", "nájemci", "nájem", 
-        "pronajímá se", "hledám podnájem", "neplatí provizi"
-    ]
-    for word in rental_keywords:
-        if word in text_lower:
-            return False  # Je to pronájem -> NECHCEME
+    # ZAKÁZANÁ SLOVA (odpad)
+    zakazana_slova = ["prodám", "nabízím", "pronajmu", "odstoupím", "k pronájmu", "pronájem", "podnájem", "provize", "pronajímám", "k prodeji"]
+    for slovo in zakazana_slova:
+        if slovo in text_lower:
+            return False
             
-    # 2. Povolovací slova - text MUSÍ obsahovat nákupní záměr
-    purchase_keywords = [
-        "koupím", "koupit", "koupi", "ke koupi", "koupíme", 
-        "sháním dům", "sháním byt", "hledám dům", "hledám byt", 
-        "hledám pozemek", "koupím pozemek", "vlastní bydlení", 
-        "investiční byt", "koupím nemovitost", "koupím chatu",
-        "koupím stavební parcelu", "koupím byt v"
-    ]
-    
-    # Zkontrolujeme, zda text obsahuje alespoň jedno kupní slovo
-    has_purchase_intent = any(kw in text_lower for kw in purchase_keywords)
-    
-    return has_purchase_intent
+    # POVOLENÁ SLOVA (to co chceme)
+    klicova_slova = ["koupím", "hledám ke koupi", "koupíme", "sháním", "poptávám", "hledáme ke koupi", "hledám byt", "hledám dům", "koupit"]
+    for slovo in klicova_slova:
+        if slovo in text_lower:
+            return True
+            
+    return False
+
+def odeslat_na_telegram(autor, autor_url, text, prispevek_url):
+    msg = (
+        f"🚨 <b>Nová poptávka - KOUPĚ!</b>\n\n"
+        f"👤 <b>Od:</b> <a href='{autor_url}'>{autor}</a>\n"
+        f"📝 <b>Text:</b> <i>{text[:300]}...</i>\n\n"
+        f"🔗 <a href='{prispevek_url}'>Odkaz na příspěvek</a>"
+    )
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"})
+    except Exception as e:
+        print(f"Chyba při odesílání na Telegram: {e}")
 
 def run_scraper():
-    print("[+] Spouštím skraper s přísným filtrem na kupce...")
-    new_leads = []
+    print("[+] Spouštím skraper Facebook skupin...")
+    novi_zajemci = []
     
     try:
         with sync_playwright() as p:
+            # Spuštění prohlížeče (headless pro server)
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             
-            # Tady probíhá samotné stahování inzerátů (např. z Facebooku / skupin / Annonce)
-            # Příklad pro ukázku:
-            # page.goto("https://www.facebook.com/groups/...")
-            # posts = page.locator(".entry").all_text_contents()
-            #
-            # Pro každý nalezený text inzerátu (nazveme ho třeba raw_text) provedeme filtr:
-            # if is_valid_buyer_lead(raw_text):
-            #     new_leads.append({"text": raw_text, "source": "Facebook"})
-            #     send_telegram_notification(f"🏠 *Nový zájemce o koupi!*\n\n{raw_text}")
+            for group_url in FACEBOOK_SKUPINY:
+                try:
+                    print(f"[*] Projíždím: {group_url}")
+                    page.goto(group_url)
+                    time.sleep(5) # Čekání na načtení
+                    
+                    # Najde všechny bloky příspěvků na stránce
+                    prispevky_elementy = page.locator("div[role='feed'] > div").all()
+                    
+                    for element in prispevky_elementy:
+                        try:
+                            # Získání textu
+                            text_element = element.locator("div[data-ad-preview='message']")
+                            if text_element.count() > 0:
+                                post_text = text_element.first.inner_text()
+                            else:
+                                post_text = element.inner_text()
+
+                            if not post_text:
+                                continue
+
+                            # Filtrujeme POUZE KOUPI
+                            if filtrovat_jen_koupi(post_text):
+                                odkazy = element.locator("a[role='link']").all()
+                                
+                                autor = "Neznámý autor"
+                                autor_url = group_url
+                                prispevek_url = group_url 
+
+                                if len(odkazy) > 0:
+                                    # Vydolování autora a odkazů z HTML Facebooku
+                                    autor = odkazy[0].inner_text()
+                                    if not autor.strip() and len(odkazy) > 1:
+                                        autor = odkazy[1].inner_text()
+                                        
+                                    for link in odkazy:
+                                        href = link.get_attribute("href")
+                                        if href:
+                                            if "user" in href or "profile" in href:
+                                                autor_url = href
+                                            if "/posts/" in href or "/permalink/" in href:
+                                                prispevek_url = href
+
+                                if autor_url.startswith("/"): autor_url = "https://www.facebook.com" + autor_url
+                                if prispevek_url.startswith("/"): prispevek_url = "https://www.facebook.com" + prispevek_url
+
+                                lead = {
+                                    "autor": autor.replace("\n", " "),
+                                    "autor_url": autor_url,
+                                    "text": post_text,
+                                    "prispevek_url": prispevek_url
+                                }
+                                
+                                # Zabránit duplicitám, aby ti to nechodilo dvakrát
+                                if not any(l.get("text") == post_text for l in scraped_leads) and lead not in novi_zajemci:
+                                    novi_zajemci.append(lead)
+                                    odeslat_na_telegram(lead["autor"], lead["autor_url"], post_text, lead["prispevek_url"])
+
+                        except Exception:
+                            pass 
+                            
+                except Exception as group_err:
+                    print(f"[!] Chyba ve skupině {group_url}: {group_err}")
             
             browser.close()
+            
+            # Uložíme nové leady do paměti a do souboru
+            if novi_zajemci:
+                scraped_leads.extend(novi_zajemci)
+                df = pd.DataFrame(scraped_leads)
+                df.drop_duplicates(subset=["text"], inplace=True)
+                df.to_csv(DATA_FILE, index=False)
+                print(f"[+] Uloženo {len(novi_zajemci)} nových kupců.")
+                
     except Exception as e:
-        print(f"[!] Chyba při skenování: {e}")
+        print(f"[!] Hlavní chyba Playwrightu: {e}")
 
-    # Uložení platných kupců do CSV
-    if new_leads:
-        df_new = pd.DataFrame(new_leads)
-        if os.path.exists(DATA_FILE):
-            df_old = pd.read_csv(DATA_FILE)
-            df_final = pd.concat([df_old, df_new]).drop_duplicates()
-        else:
-            df_final = df_new
-        df_final.to_csv(DATA_FILE, index=False)
-        print(f"[+] Uloženo {len(new_leads)} nových kupců.")
+def skraper_na_pozadi():
+    """Tohle běží 3x denně (každých 8 hodin) bez blokování webu"""
+    while True:
+        run_scraper()
+        print("Čekám 8 hodin do dalšího spuštění...")
+        time.sleep(28800) # 8 hodin
 
-# HTML vzhled webového dashboardu
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="cs">
-<head>
-    <meta charset="UTF-8">
-    <title>Realitní CRM - Pouze Kupci</title>
-    <style>
-        body { font-family: Arial, sans-serif; background: #0f111a; color: #f1f1f1; margin: 0; padding: 20px; }
-        h1 { color: #38bdf8; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #1e293b; }
-        th, td { padding: 12px; border: 1px solid #334155; text-align: left; }
-        th { background: #0284c7; color: white; }
-        tr:nth-child(even) { background: #1e293b; }
-        tr:nth-child(odd) { background: #0f172a; }
-        .badge { background: #22c55e; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-        .info-box { background: #1e293b; padding: 15px; border-radius: 8px; border-left: 4px solid #38bdf8; margin-bottom: 20px; }
-    </style>
-</head>
-<body>
-    <h1>📊 Realitní CRM Dashboard (Filtrováno: Pouze Kupci)</h1>
-    <div class="info-box">
-        <p>🟢 Systém běží 24/7 v cloudu. Pronájmy jsou kompletně blokovány, ukládají se a hlásí se pouze zájemci o koupi.</p>
-    </div>
-    
-    <h2>Seznam poptávek</h2>
-    <table>
-        <tr>
-            <th>Text inzerátu / Poptávky</th>
-            <th>Zdroj</th>
-        </tr>
-        {% for index, row in leads.iterrows() %}
-        <tr>
-            <td>{{ row.get('text', 'Žádný text') }}</td>
-            <td><span class="badge">{{ row.get('source', 'Neznámý') }}</span></td>
-        </tr>
-        {% endfor %}
-    </table>
-</body>
-</html>
-"""
-
-@app.route("/")
+@app.route('/')
 def index():
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
-    else:
-        # Výchozí ukázkový řádek, pokud soubor ještě prázdný
-        df = pd.DataFrame([
-            {"text": "Ukázkový lead: Hledám ke koupi rodinný dům se zahradou.", "source": "Systém (Filtrováno)"}
-        ])
-    return render_template_string(HTML_TEMPLATE, leads=df)
+    html = """
+    <!DOCTYPE html>
+    <html lang="cs">
+    <head>
+        <meta charset="UTF-8">
+        <title>Leady - Koupě</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 20px; }
+            h2 { color: #333; }
+            table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+            th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+            th { background: #007bff; color: white; }
+            a { color: #007bff; text-decoration: none; font-weight: bold; }
+            a:hover { text-decoration: underline; }
+            .leady-text { white-space: pre-wrap; font-size: 14px; }
+        </style>
+    </head>
+    <body>
+        <h2>🏠 Zachycené poptávky - Koupě nemovitostí</h2>
+        <table>
+            <tr>
+                <th>Autor</th>
+                <th>Text příspěvku</th>
+                <th>Odkaz</th>
+            </tr>
+            {% for lead in leads %}
+            <tr>
+                <td><a href="{{ lead['autor_url'] }}" target="_blank">{{ lead['autor'] }}</a></td>
+                <td class="leady-text">{{ lead['text'] }}</td>
+                <td><a href="{{ lead['prispevek_url'] }}" target="_blank">Otevřít na FB</a></td>
+            </tr>
+            {% endfor %}
+        </table>
+    </body>
+    </html>
+    """
+    # Prohodíme pořadí, ať jsou nejnovější na webu nahoře
+    return render_template_string(html, leads=reversed(scraped_leads))
 
-# Automatický plánovač na pozadí (spustí skraper každých 6 hodin)
-scheduler = BackgroundScheduler()
-scheduler.add_job(func=run_scraper, trigger="interval", hours=6)
-scheduler.start()
+# Bezpečně nastartujeme vlákno pro skraper
+t = threading.Thread(target=skraper_na_pozadi, daemon=True)
+t.start()
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
